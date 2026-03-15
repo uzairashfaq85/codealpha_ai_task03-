@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-label="Nottingham Music RNN Banner">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="320" fill="url(#bg)" rx="18"/>
+  <g opacity="0.18" stroke="url(#accent)" fill="none">
+    <path d="M0 240 C200 120, 400 300, 600 180 C800 80, 1000 260, 1200 140" stroke-width="3"/>
+    <path d="M0 270 C220 170, 430 320, 650 210 C820 120, 1020 270, 1200 190" stroke-width="2"/>
+  </g>
+  <text x="60" y="132" fill="#e2e8f0" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="42" font-weight="700">
+    Nottingham Music Generation with RNN
+  </text>
+  <text x="60" y="176" fill="#94a3b8" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="22">
+    TensorFlow sequence modeling • MIDI preprocessing • Training, evaluation, sampling
+  </text>
+  <rect x="60" y="210" width="420" height="6" fill="url(#accent)" rx="3"/>
+  <text x="60" y="252" fill="#cbd5e1" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="18">
+    codealpha_ai_task03- • Portfolio Overview
+  </text>
+</svg>
