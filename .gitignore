@@ -1,0 +1,42 @@
+# Project: codealpha_ai_task03-
+# Created: August 2024
+# Description: Ignore generated, environment, and dataset artifacts.
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Tooling / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build and logs
+build/
+dist/
+*.log
+
+# Model artifacts
+models/
+*.ckpt
+*.ckpt.*
+*.index
+*.meta
+*.data-*
+
+# Dataset and generated media
+data/
+dataset.zip
+*.midi
