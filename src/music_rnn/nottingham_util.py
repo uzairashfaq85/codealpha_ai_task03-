@@ -1,13 +1,22 @@
-import numpy as np
+"""
+Project: codealpha_ai_task03-
+Created: August 2024
+Description: Nottingham dataset parsing, preprocessing, evaluation, and MIDI sampling helpers.
+"""
+
 import os
-import midi
-import cPickle
+import pickle
 from pprint import pprint
 
-import midi_util
+try:
+    import midi
+except ImportError:
+    import python3_midi as midi
 import mingus
 import mingus.core.chords
-import sampling
+import numpy as np
+
+from . import midi_util
 
 PICKLE_LOC = 'data/nottingham.pickle'
 NOTTINGHAM_MELODY_MAX = 88
@@ -55,14 +64,14 @@ def prepare_nottingham_pickle(time_step, numTracks, chord_cutoff=64, filename=PI
     filename: the location where the pickle will be saved to
     """
 
-    data = {} #initialzing variables
+    data = {}
     store = {}
     chords = {}
     max_seq = 0
     seq_lens = []
     
     for d in ["train", "test", "valid"]:
-        print "Parsing {}...".format(d)
+        print("Parsing {}...".format(d))
         parsed = parse_nottingham_directory("data/Nottingham/{}".format(d), time_step, numTracks, verbose=verbose)
         metadata = [s[0] for s in parsed]
         seqs = [s[1] for s in parsed]
@@ -81,16 +90,18 @@ def prepare_nottingham_pickle(time_step, numTracks, chord_cutoff=64, filename=PI
 
     avg_seq = float(sum(seq_lens)) / len(seq_lens)
 
-    chords = { c: i for c, i in chords.iteritems() if chords[c] >= chord_cutoff }
-    chord_mapping = { c: i for i, c in enumerate(chords.keys()) }
+    chords = {c: i for c, i in chords.items() if chords[c] >= chord_cutoff}
+    chord_mapping = {c: i for i, c in enumerate(chords.keys())}
+    if NO_CHORD not in chord_mapping:
+        chord_mapping[NO_CHORD] = len(chord_mapping)
     num_chords = len(chord_mapping)
     store['chord_to_idx'] = chord_mapping
     if verbose:
         pprint(chords)
-        print "Number of chords: {}".format(num_chords)
-        print "Max Sequence length: {}".format(max_seq)
-        print "Avg Sequence length: {}".format(avg_seq)
-        print "Num Sequences: {}".format(len(seq_lens))
+        print("Number of chords: {}".format(num_chords))
+        print("Max Sequence length: {}".format(max_seq))
+        print("Avg Sequence length: {}".format(avg_seq))
+        print("Num Sequences: {}".format(len(seq_lens)))
 
     def combine(melody, harmony):
         full = np.zeros((melody.shape[0], NOTTINGHAM_MELODY_RANGE + num_chords))
@@ -121,12 +132,12 @@ def prepare_nottingham_pickle(time_step, numTracks, chord_cutoff=64, filename=PI
         return full
 
     for d in ["train", "test", "valid"]:
-        print "Combining {}".format(d)
-        store[d] = [ combine(m, h) for m, h in data[d] ]
+        print("Combining {}".format(d))
+        store[d] = [combine(m, h) for m, h in data[d]]
         store[d + '_metadata'] = data[d + '_metadata']
 
-    with open(filename, 'w') as f:
-        cPickle.dump(store, f, protocol=-1)
+    with open(filename, 'wb') as f:
+        pickle.dump(store, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     return True
 
@@ -138,20 +149,23 @@ def parse_nottingham_directory(input_dir, time_step, numTracks, verbose=False):
     a sequence with T time steps over D dimensions
     """
 
-    files = [ os.path.join(input_dir, f) for f in os.listdir(input_dir)
-              if os.path.isfile(os.path.join(input_dir, f)) ] #checking if directory is valid
-    sequences = [ \
-        parse_nottingham_to_sequence(f, numTracks, time_step=time_step, verbose=verbose) \
-        for f in files ]
+    files = [
+        os.path.join(input_dir, f)
+        for f in os.listdir(input_dir)
+        if os.path.isfile(os.path.join(input_dir, f))
+    ]
+    sequences = [
+        parse_nottingham_to_sequence(f, numTracks, time_step=time_step, verbose=verbose)
+        for f in files
+    ]
 
     if verbose:
-        print "Total sequences: {}".format(len(sequences))
+        print("Total sequences: {}".format(len(sequences)))
     
-    # filter out the non 2-track MIDI's
-    sequences = filter(lambda x: x[1] != None, sequences)
+    sequences = [x for x in sequences if x[1] is not None]
 
     if verbose:
-        print "Total sequences left: {}".format(len(sequences))
+        print("Total sequences left: {}".format(len(sequences)))
 
     return sequences
 
@@ -162,54 +176,47 @@ def parse_nottingham_to_sequence(input_filename, numTracks, time_step, verbose=F
     returns a [T x D] matrix representing a sequence with T time steps over
     D dimensions
     """
-    sequence = []
-    pattern = midi.read_midifile(input_filename) #returns a pattern which has a list of tracks
+    pattern = midi.read_midifile(input_filename)
 
     metadata = {
         "path": input_filename,
-        "name": input_filename.split("/")[-1].split(".")[0]
+        "name": os.path.splitext(os.path.basename(input_filename))[0],
     }
 
     # Most nottingham midi's have 3 tracks. metadata info, melody, harmony
     # throw away any tracks that don't fit this
-    #if len(pattern) != 3: #????? whytho
-    if len(pattern) != numTracks:      
-        if verbose:	
-            "Skipping track with {} tracks".format(len(pattern))
+    if len(pattern) != numTracks:
+        if verbose:
+            print("Skipping track with {} tracks".format(len(pattern)))
         return (metadata, None)
 
-
-
-    # ticks_per_quarter = -1
-    for msg in pattern[0]: #looks like we're trying to get the ticks_per_quarter from the metadata
+    ticks_per_quarter = pattern.resolution
+    for msg in pattern[0]:
         if isinstance(msg, midi.TimeSignatureEvent):
             metadata["ticks_per_quarter"] = msg.get_metronome()
             ticks_per_quarter = msg.get_metronome()
 
     if verbose:
-        print "{}".format(input_filename)
-        print "Track resolution: {}".format(pattern.resolution)
-        print "Number of tracks: {}".format(len(pattern))
-        print "Time step: {}".format(time_step)
-        print "Ticks per quarter: {}".format(ticks_per_quarter)
+        print("{}".format(input_filename))
+        print("Track resolution: {}".format(pattern.resolution))
+        print("Number of tracks: {}".format(len(pattern)))
+        print("Time step: {}".format(time_step))
+        print("Ticks per quarter: {}".format(ticks_per_quarter))
 
-    # Track ingestion stage
-    track_ticks = 0
-
-    melody_notes, melody_ticks = midi_util.ingest_notes(pattern[1]) # extracting the notes from the melody and the chord progresiion
+    melody_notes, melody_ticks = midi_util.ingest_notes(pattern[1])
     harmony_notes, harmony_ticks = midi_util.ingest_notes(pattern[2])
 
-    track_ticks = midi_util.round_tick(max(melody_ticks, harmony_ticks), time_step) #IDK WTF track ticks ARE FUCK MY LIFE GODDAMIT
+    track_ticks = midi_util.round_tick(max(melody_ticks, harmony_ticks), time_step)
     if verbose:
-        print "Track ticks (rounded): {} ({} time steps)".format(track_ticks, track_ticks/time_step)
+        print("Track ticks (rounded): {} ({} time steps)".format(track_ticks, track_ticks // time_step))
     
     melody_sequence = midi_util.round_notes(melody_notes, track_ticks, time_step, 
                                   R=NOTTINGHAM_MELODY_RANGE, O=NOTTINGHAM_MELODY_MIN)
 
-    for i in range(melody_sequence.shape[0]): #for all the chord shapes ever in melody sequence 
+    for i in range(melody_sequence.shape[0]):
         if np.count_nonzero(melody_sequence[i, :]) > 1:
             if verbose:
-                print "Double note found: {}: {} ({})".format(i, np.nonzero(melody_sequence[i, :]), input_filename)
+                print("Double note found: {}: {} ({})".format(i, np.nonzero(melody_sequence[i, :]), input_filename))
             return (metadata, None)
 
     harmony_sequence = midi_util.round_notes(harmony_notes, track_ticks, time_step)
@@ -226,8 +233,13 @@ def parse_nottingham_to_sequence(input_filename, numTracks, time_step, verbose=F
                 chord = mingus.core.chords.determine(notes_shift, shorthand=True)
             if len(chord) == 0:
                 if verbose:
-                    print "Could not determine chord: {} ({}, {}), defaulting to last steps chord" \
-                          .format(notes_shift, input_filename, i)
+                    print(
+                        "Could not determine chord: {} ({}, {}), defaulting to last steps chord".format(
+                            notes_shift,
+                            input_filename,
+                            i,
+                        )
+                    )
                 if len(harmonies) > 0:
                     harmonies.append(harmonies[-1])
                 else:
@@ -313,9 +325,9 @@ class NottinghamSampler(object):
         harmonies = sorted(list(enumerate(probs[NOTTINGHAM_MELODY_RANGE:])), 
                      key=lambda x: x[1], reverse=True)[:4]
         harmonies = [(self.idx_to_chord[i], j) for i, j in harmonies]
-        print 'Top Melody Notes: '
+        print('Top Melody Notes: ')
         pprint(melodies)
-        print 'Top Harmony Notes: '
+        print('Top Harmony Notes: ')
         pprint(harmonies)
 
     def sample_notes_static(self, probs):
@@ -430,20 +442,19 @@ def accuracy(batch_probs, data, num_samples=1):
 
     maccs, haccs, taccs = [], [], []
     for i in range(num_samples):
-        print "Sample {}".format(i)
+        print("Sample {}".format(i))
         m, mi, h, hi = calc_accuracy()
         maccs.append( float(m) / float(m + mi))
         haccs.append( float(h) / float(h + hi))
         taccs.append( float(m + h) / float(m + h + mi + hi) )
 
-    print "Melody Precision/Recall: {}".format(sum(maccs)/len(maccs))
-    print "Harmony Precision/Recall: {}".format(sum(haccs)/len(haccs))
-    print "Total Precision/Recall: {}".format(sum(taccs)/len(taccs))
+    print("Melody Precision/Recall: {}".format(sum(maccs) / len(maccs)))
+    print("Harmony Precision/Recall: {}".format(sum(haccs) / len(haccs)))
+    print("Total Precision/Recall: {}".format(sum(taccs) / len(taccs)))
 
 def seperate_accuracy(batch_probs, data, num_samples=1):
 
     def calc_accuracy():
-        total = 0
         total_correct, total_incorrect = 0, 0
         for _, batch_targets in data:
             num_time_steps = len(batch_targets)
@@ -474,11 +485,11 @@ def seperate_accuracy(batch_probs, data, num_samples=1):
 
     taccs = []
     for i in range(num_samples):
-        print "Sample {}".format(i)
+        print("Sample {}".format(i))
         c, ic = calc_accuracy()
         taccs.append( float(c) / float(c + ic))
 
-    print "Precision/Recall: {}".format(sum(taccs)/len(taccs))
+    print("Precision/Recall: {}".format(sum(taccs) / len(taccs)))
 
 def i_vi_iv_v(chord_to_idx, repeats, input_dim):
     r = NOTTINGHAM_MELODY_RANGE
@@ -511,15 +522,3 @@ def create_model(numTracks):
 
     prepare_nottingham_pickle(time_step, numTracks, verbose=False)
     print('Model created!')
-
-if __name__ == '__main__':
-
-    resolution = 480
-    time_step = 120
-
-    assert resolve_chord("GM7") == "GM"
-    assert resolve_chord("G#dim|AM7") == "G#m"
-    assert resolve_chord("Dm9") == "Dm"
-    assert resolve_chord("AM11") == "AM"
-
-    prepare_nottingham_pickle(time_step, verbose=False)
