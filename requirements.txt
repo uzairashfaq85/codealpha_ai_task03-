@@ -1,0 +1,9 @@
+# Project: codealpha_ai_task03-
+# Created: August 2024
+# Description: Runtime dependencies for training, evaluation, and MIDI utilities.
+
+numpy>=1.23
+matplotlib>=3.7
+tensorflow>=2.13
+mingus>=0.6.1
+python3-midi>=0.2.5
