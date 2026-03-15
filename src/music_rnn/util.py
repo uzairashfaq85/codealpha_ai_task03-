@@ -1,14 +1,17 @@
+"""
+Project: codealpha_ai_task03-
+Created: August 2024
+Description: Data loading, batching, epoch execution, and metrics helpers.
+"""
+
 import os
-import math
-import cPickle
 from collections import defaultdict
 from random import shuffle
 
 import numpy as np
-import tensorflow as tf    
 
-import midi_util
-import nottingham_util
+from . import midi_util
+from . import nottingham_util
 
 def parse_midi_directory(input_dir, time_step):
     """ 
@@ -45,14 +48,13 @@ def batch_data(sequences, time_batch_len=128, max_time_batches=10,
 
     assert time_batch_len > 0
 
-    dims = sequences[0].shape[1]
     sequence_lens = [s.shape[0] for s in sequences]
 
     if verbose:
         avg_seq_len = sum(sequence_lens) / len(sequences)
-        print "Average Sequence Length: {}".format(avg_seq_len)
-        print "Max Sequence Length: {}".format(time_batch_len)
-        print "Number of sequences: {}".format(len(sequences))
+        print("Average Sequence Length: {}".format(avg_seq_len))
+        print("Max Sequence Length: {}".format(time_batch_len))
+        print("Number of sequences: {}".format(len(sequences)))
 
     batches = defaultdict(list)
     for sequence in sequences:
@@ -65,8 +67,8 @@ def batch_data(sequences, time_batch_len=128, max_time_batches=10,
         batches[num_time_steps].append(sequence)
 
     if verbose:
-        print "Batch distribution:"
-        print [(k, len(v)) for (k, v) in batches.iteritems()]
+        print("Batch distribution:")
+        print([(k, len(v)) for (k, v) in batches.items()])
 
     def arrange_batch(sequences, num_time_steps):
         sequences = [s[:(num_time_steps*time_batch_len)+1, :] for s in sequences]
@@ -104,7 +106,7 @@ def batch_data(sequences, time_batch_len=128, max_time_batches=10,
 
         return (tb_data, tb_targets)
 
-    return [ arrange_batch(b, n) for n, b in batches.iteritems() ]
+    return [arrange_batch(b, n) for n, b in batches.items()]
         
 def load_data(data_dir, time_step, time_batch_len, max_time_batches, nottingham=None):
     """
@@ -146,7 +148,21 @@ def load_data(data_dir, time_step, time_batch_len, max_time_batches, nottingham=
                 'name': f.split("/")[-1].split(".")[0]
             } for f in files]
 
-        dataset_data = batch_data(sequences, time_batch_len, max_time_batches, softmax = True if nottingham else False)
+        dataset_data = batch_data(
+            sequences,
+            time_batch_len,
+            max_time_batches,
+            softmax=True if nottingham else False,
+        )
+
+        if len(dataset_data) == 0:
+            raise ValueError(
+                "No batchable sequences found for dataset '{}' (time_batch_len={}, max_time_batches={}).".format(
+                    dataset,
+                    time_batch_len,
+                    max_time_batches,
+                )
+            )
 
         data[dataset] = {
             "data": dataset_data,
@@ -188,21 +204,13 @@ def run_epoch(session, model, batches, training=False, testing=False):
         batch_size = data[0].shape[1]
         num_time_steps = len(data)
         state = model.get_cell_zero_state(session, batch_size) 
-        probs = list()
-
         for tb_data, tb_targets in zip(data, targets):
             if testing:
                 tbd = tb_data
                 tbt = tb_targets
             else:
-                # shuffle all the batches of input, state, and target
-                batches = tb_data.shape[1]
-                permutations = np.random.permutation(batches)
-                tbd = np.zeros_like(tb_data)
-                tbd[:, np.arange(batches), :] = tb_data[:, permutations, :]
-                tbt = np.zeros_like(tb_targets)
-                tbt[:, np.arange(batches), :] = tb_targets[:, permutations, :]
-                state[np.arange(batches)] = state[permutations]
+                tbd = tb_data
+                tbt = tb_targets
 
             feed_dict = {
                 model.initial_state: state,
@@ -236,7 +244,7 @@ def accuracy(batch_probs, data, num_samples=20):
 
     false_positives, false_negatives, true_positives = 0, 0, 0 
     for _, batch_targets in data:
-        num_time_steps = len(batch_data)
+        num_time_steps = len(batch_targets)
         for ts_targets, ts_probs in zip(batch_targets, batch_probs[num_time_steps]):
 
             assert ts_targets.shape == ts_targets.shape
@@ -251,8 +259,8 @@ def accuracy(batch_probs, data, num_samples=20):
                             false_negatives += (num_samples - num_occurrences)
                             true_positives += num_occurrences
                 
-    accuracy = (float(true_positives) / float(true_positives + false_positives + false_negatives)) 
+    acc_score = (float(true_positives) / float(true_positives + false_positives + false_negatives)) 
 
-    print "Precision: {}".format(float(true_positives) / (float(true_positives + false_positives)))
-    print "Recall: {}".format(float(true_positives) / (float(true_positives + false_negatives)))
-    print "Accuracy: {}".format(accuracy)
+    print("Precision: {}".format(float(true_positives) / (float(true_positives + false_positives))))
+    print("Recall: {}".format(float(true_positives) / (float(true_positives + false_negatives))))
+    print("Accuracy: {}".format(acc_score))
