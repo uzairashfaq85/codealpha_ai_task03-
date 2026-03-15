@@ -1,19 +1,34 @@
-import os, sys
+"""
+Project: codealpha_ai_task03-
+Created: August 2024
+Description: Main training entrypoint for the Nottingham dual-softmax model.
+"""
+
 import argparse
-import time
 import itertools
-import cPickle
 import logging
+import os
+import pickle
 import random
 import string
+import sys
+import time
 
 import numpy as np
-import tensorflow as tf    
+import tensorflow.compat.v1 as tf
 import matplotlib.pyplot as plt
 
-import nottingham_util
-import util
-from model import Model, NottinghamModel
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
+
+from music_rnn import nottingham_util
+from music_rnn import util
+from music_rnn.model import NottinghamModel
+
+tf.disable_v2_behavior()
 
 def get_config_name(config):
     def replace_dot(s): return s.replace(".", "p")
@@ -47,31 +62,38 @@ class DefaultConfig(object):
         return """Num Layers: {}, Hidden Size: {}, Melody Coeff: {}, Dropout Prob: {}, Input Dropout Prob: {}, Cell Type: {}, Time Batch Len: {}, Learning Rate: {}, Decay: {}""".format(self.num_layers, self.hidden_size, self.melody_coeff, self.dropout_prob, self.input_dropout_prob, self.cell_type, self.time_batch_len, self.learning_rate, self.learning_rate_decay)
     
 def train_model():
-    np.random.seed() #
+    np.random.seed()
 
-    parser = argparse.ArgumentParser(description='Script to train and save a model.') #just like getopt to parse command line arguments
+    parser = argparse.ArgumentParser(description='Script to train and save a model.')
     parser.add_argument('--dataset', type=str, default='softmax',
                         # choices = ['bach', 'nottingham', 'softmax'],
                         choices = ['softmax'])
     parser.add_argument('--model_dir', type=str, default='models')
     parser.add_argument('--run_name', type=str, default=time.strftime("%m%d_%H%M"))
+    parser.add_argument('--pickle_path', type=str, default=nottingham_util.PICKLE_LOC)
+    parser.add_argument('--num_epochs', type=int, default=None)
+    parser.add_argument('--max_time_batches', type=int, default=None)
+    parser.add_argument('--time_batch_len', type=int, default=None)
+    parser.add_argument('--fast_dev_run', action='store_true', default=False)
 
     args = parser.parse_args()
 
     if args.dataset == 'softmax':
-        resolution = 480
         time_step = 120
         model_class = NottinghamModel
-        with open(nottingham_util.PICKLE_LOC, 'r') as f:
-            pickle = cPickle.load(f)
-            chord_to_idx = pickle['chord_to_idx']
+        if not os.path.exists(args.pickle_path):
+            raise FileNotFoundError(
+                "Dataset pickle not found: {}. Run scripts/create_demo_data.py or scripts/main.py first.".format(
+                    args.pickle_path
+                )
+            )
+        with open(args.pickle_path, 'rb') as f:
+            data_pickle = pickle.load(f)
 
-        input_dim = pickle["train"][0].shape[1]
-        print 'Finished loading data, input dim: {}'.format(input_dim)
+        input_dim = data_pickle["train"][0].shape[1]
+        print('Finished loading data, input dim: {}'.format(input_dim))
     else:
         raise Exception("Other datasets not yet implemented")
-
-    initializer = tf.random_uniform_initializer(-0.1, 0.1)
 
     best_config = None
     best_valid_loss = None
@@ -79,7 +101,7 @@ def train_model():
     # set up run dir
     run_folder = os.path.join(args.model_dir, args.run_name)
     if os.path.exists(run_folder):
-        raise Exception("Run name {} already exists, choose a different one", format(run_folder))
+        raise Exception("Run name {} already exists, choose a different one".format(run_folder))
     os.makedirs(run_folder)
 
     logger = logging.getLogger(__name__) 
@@ -100,7 +122,8 @@ def train_model():
     }
 
     # Generate product of hyperparams
-    runs = list(list(itertools.izip(grid, x)) for x in itertools.product(*grid.itervalues()))
+    grid_keys = list(grid.keys())
+    runs = [list(zip(grid_keys, x)) for x in itertools.product(*grid.values())]
     logger.info("{} runs detected".format(len(runs)))
 
     for combination in runs:
@@ -111,25 +134,37 @@ def train_model():
         for attr, value in combination:
             setattr(config, attr, value)
 
+        if args.fast_dev_run:
+            config.num_epochs = 2
+            config.max_time_batches = -1
+            config.time_batch_len = 32
+            config.hidden_size = 64
+        if args.num_epochs is not None:
+            config.num_epochs = args.num_epochs
+        if args.max_time_batches is not None:
+            config.max_time_batches = args.max_time_batches
+        if args.time_batch_len is not None:
+            config.time_batch_len = args.time_batch_len
+
         if config.dataset == 'softmax':
-            data = util.load_data('', time_step, config.time_batch_len, config.max_time_batches, nottingham=pickle)
+            data = util.load_data('', time_step, config.time_batch_len, config.max_time_batches, nottingham=data_pickle)
             config.input_dim = data["input_dim"]
         else:
             raise Exception("Other datasets not yet implemented")
 
         logger.info(config)
         config_file_path = os.path.join(run_folder, get_config_name(config) + '.config')
-        with open(config_file_path, 'w') as f: 
-            cPickle.dump(config, f)
+        with open(config_file_path, 'wb') as f:
+            pickle.dump(config, f, protocol=pickle.HIGHEST_PROTOCOL)
 
         with tf.Graph().as_default(), tf.Session() as session:
             with tf.variable_scope("model", reuse=None):
-                train_model = model_class(config, training=True)
+                train_graph_model = model_class(config, training=True)
             with tf.variable_scope("model", reuse=True):
                 valid_model = model_class(config, training=False)
 
-            saver = tf.train.Saver(tf.all_variables(), max_to_keep=40)
-            tf.initialize_all_variables().run()
+            saver = tf.train.Saver(tf.global_variables(), max_to_keep=40)
+            tf.global_variables_initializer().run()
 
             # training
             early_stop_best_loss = None
@@ -138,7 +173,7 @@ def train_model():
             train_losses, valid_losses = [], []
             start_time = time.time()
             for i in range(config.num_epochs):
-                loss = util.run_epoch(session, train_model, 
+                loss = util.run_epoch(session, train_graph_model, 
                     data["train"]["data"], training=True, testing=False)
                 train_losses.append((i, loss))
                 if i == 0:
@@ -187,3 +222,7 @@ def train_model():
                 best_config = config
 
     logger.info("Best Config: {}, Loss: {}".format(best_config, best_valid_loss))
+
+
+if __name__ == '__main__':
+    train_model()
