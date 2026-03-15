@@ -1,11 +1,19 @@
-import os
-import logging
-import numpy as np
-import tensorflow as tf    
-from tensorflow.models.rnn import rnn_cell
-from tensorflow.models.rnn import rnn, seq2seq
+"""
+Project: codealpha_ai_task03-
+Created: August 2024
+Description: TensorFlow graph models for multi-track symbolic music generation.
+"""
 
-import nottingham_util
+import tensorflow.compat.v1 as tf
+try:
+    from tensorflow.compat.v1.nn import rnn_cell as tf_rnn_cell
+except Exception:
+    tf_rnn_cell = None
+from tensorflow.python.ops import rnn_cell_impl
+
+from . import nottingham_util
+
+tf.disable_v2_behavior()
 
 class Model(object):
     """ 
@@ -27,8 +35,20 @@ class Model(object):
         input_dropout_prob = config.input_dropout_prob
         cell_type = config.cell_type
 
-        self.seq_input = \
-            tf.placeholder(tf.float32, shape=[self.time_batch_len, None, input_dim])
+        self.seq_input = tf.placeholder(
+            tf.float32,
+            shape=[self.time_batch_len, None, input_dim],
+            name="seq_input",
+        )
+
+        if tf_rnn_cell is not None:
+            try:
+                _ = tf_rnn_cell.MultiRNNCell
+                self._rnn_cell = tf_rnn_cell
+            except Exception:
+                self._rnn_cell = rnn_cell_impl
+        else:
+            self._rnn_cell = rnn_cell_impl
 
         if (dropout_prob <= 0.0 or dropout_prob > 1.0):
             raise Exception("Invalid dropout probability: {}".format(dropout_prob))
@@ -45,37 +65,44 @@ class Model(object):
 
         def create_cell(input_size):
             if cell_type == "vanilla":
-                cell_class = rnn_cell.BasicRNNCell
+                cell_class = self._rnn_cell.BasicRNNCell
             elif cell_type == "gru":
-                cell_class = rnn_cell.BasicGRUCell
+                cell_class = self._rnn_cell.BasicGRUCell
             elif cell_type == "lstm":
-                cell_class = rnn_cell.BasicLSTMCell
+                cell_class = self._rnn_cell.BasicLSTMCell
             else:
                 raise Exception("Invalid cell type: {}".format(cell_type))
 
-            cell = cell_class(hidden_size, input_size = input_size)
+            if cell_type == "lstm":
+                cell = cell_class(hidden_size, state_is_tuple=False)
+            else:
+                cell = cell_class(hidden_size)
             if training:
-                return rnn_cell.DropoutWrapper(cell, output_keep_prob = dropout_prob)
+                return self._rnn_cell.DropoutWrapper(cell, output_keep_prob=dropout_prob)
             else:
                 return cell
 
         if training:
-            self.seq_input_dropout = tf.nn.dropout(self.seq_input, keep_prob = input_dropout_prob)
+            self.seq_input_dropout = tf.nn.dropout(self.seq_input, keep_prob=input_dropout_prob)
         else:
             self.seq_input_dropout = self.seq_input
 
-        self.cell = rnn_cell.MultiRNNCell(
-            [create_cell(input_dim)] + [create_cell(hidden_size) for i in range(1, num_layers)])
+        self.cell = self._rnn_cell.MultiRNNCell(
+            [create_cell(input_dim)] + [create_cell(hidden_size) for _ in range(1, num_layers)],
+            state_is_tuple=False,
+        )
 
-        batch_size = tf.shape(self.seq_input_dropout)[0]
+        batch_size = tf.shape(self.seq_input_dropout)[1]
         self.initial_state = self.cell.zero_state(batch_size, tf.float32)
-        inputs_list = tf.unpack(self.seq_input_dropout)
+        inputs_list = tf.unstack(self.seq_input_dropout)
 
-        # rnn outputs a list of [batch_size x H] outputs
-        outputs_list, self.final_state = rnn.rnn(self.cell, inputs_list, 
-                                                 initial_state=self.initial_state)
+        outputs_list, self.final_state = tf.nn.static_rnn(
+            self.cell,
+            inputs_list,
+            initial_state=self.initial_state,
+        )
 
-        outputs = tf.pack(outputs_list)
+        outputs = tf.stack(outputs_list)
         outputs_concat = tf.reshape(outputs, [-1, hidden_size])
         logits_concat = tf.matmul(outputs_concat, output_W) + output_b
         logits = tf.reshape(logits_concat, [self.time_batch_len, -1, input_dim])
@@ -83,15 +110,20 @@ class Model(object):
         # probabilities of each note
         self.probs = self.calculate_probs(logits)
         self.loss = self.init_loss(logits, logits_concat)
-        self.train_step = tf.train.RMSPropOptimizer(self.lr, decay = self.lr_decay) \
-                            .minimize(self.loss)
+        self.train_step = tf.train.RMSPropOptimizer(self.lr, decay=self.lr_decay).minimize(self.loss)
 
     def init_loss(self, outputs, _):
-        self.seq_targets = \
-            tf.placeholder(tf.float32, [self.time_batch_len, None, self.input_dim])
+        self.seq_targets = tf.placeholder(
+            tf.float32,
+            [self.time_batch_len, None, self.input_dim],
+            name="seq_targets",
+        )
 
-        batch_size = tf.shape(self.seq_input_dropout)
-        cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(outputs, self.seq_targets)
+        batch_size = tf.shape(self.seq_input_dropout)[1]
+        cross_ent = tf.nn.sigmoid_cross_entropy_with_logits(
+            logits=outputs,
+            labels=self.seq_targets,
+        )
         return tf.reduce_sum(cross_ent) / self.time_batch_len / tf.to_float(batch_size)
 
     def calculate_probs(self, logits):
@@ -110,8 +142,7 @@ class NottinghamModel(Model):
     """
 
     def init_loss(self, outputs, outputs_concat):
-        self.seq_targets = \
-            tf.placeholder(tf.int64, [self.time_batch_len, None, 2])
+        self.seq_targets = tf.placeholder(tf.int64, [self.time_batch_len, None, 2], name="seq_targets")
         batch_size = tf.shape(self.seq_targets)[1]
 
         with tf.variable_scope("rnnlstm"):
@@ -120,12 +151,14 @@ class NottinghamModel(Model):
         r = nottingham_util.NOTTINGHAM_MELODY_RANGE
         targets_concat = tf.reshape(self.seq_targets, [-1, 2])
 
-        melody_loss = tf.nn.sparse_softmax_cross_entropy_with_logits( \
-            outputs_concat[:, :r], \
-            targets_concat[:, 0])
-        harmony_loss = tf.nn.sparse_softmax_cross_entropy_with_logits( \
-            outputs_concat[:, r:], \
-            targets_concat[:, 1])
+        melody_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=outputs_concat[:, :r],
+            labels=targets_concat[:, 0],
+        )
+        harmony_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=outputs_concat[:, r:],
+            labels=targets_concat[:, 1],
+        )
         losses = tf.add(self.melody_coeff * melody_loss, (1 - self.melody_coeff) * harmony_loss)
         return tf.reduce_sum(losses) / self.time_batch_len / tf.to_float(batch_size)
 
@@ -134,8 +167,8 @@ class NottinghamModel(Model):
         for t in range(self.time_batch_len):
             melody_softmax = tf.nn.softmax(logits[t, :, :nottingham_util.NOTTINGHAM_MELODY_RANGE])
             harmony_softmax = tf.nn.softmax(logits[t, :, nottingham_util.NOTTINGHAM_MELODY_RANGE:])
-            steps.append(tf.concat(1, [melody_softmax, harmony_softmax]))
-        return tf.pack(steps)
+            steps.append(tf.concat([melody_softmax, harmony_softmax], axis=1))
+        return tf.stack(steps)
 
     def assign_melody_coeff(self, session, melody_coeff):
         if melody_coeff < 0.0 or melody_coeff > 1.0:
@@ -152,16 +185,17 @@ class NottinghamSeparate(Model):
     """
 
     def init_loss(self, outputs, outputs_concat):
-        self.seq_targets = \
-            tf.placeholder(tf.int64, [self.time_batch_len, None])
+        self.seq_targets = tf.placeholder(tf.int64, [self.time_batch_len, None], name="seq_targets")
         batch_size = tf.shape(self.seq_targets)[1]
 
         with tf.variable_scope("rnnlstm"):
             self.melody_coeff = tf.constant(self.config.melody_coeff)
 
         targets_concat = tf.reshape(self.seq_targets, [-1])
-        losses = tf.nn.sparse_softmax_cross_entropy_with_logits( \
-            outputs_concat, targets_concat)
+        losses = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            logits=outputs_concat,
+            labels=targets_concat,
+        )
 
         return tf.reduce_sum(losses) / self.time_batch_len / tf.to_float(batch_size)
 
@@ -170,4 +204,4 @@ class NottinghamSeparate(Model):
         for t in range(self.time_batch_len):
             softmax = tf.nn.softmax(logits[t, :, :])
             steps.append(softmax)
-        return tf.pack(steps)
+        return tf.stack(steps)
